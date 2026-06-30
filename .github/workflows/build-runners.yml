@@ -68,7 +68,13 @@ jobs:
         env:
           PKG: ${{ matrix.pkg }}
           MAJOR: ${{ matrix.major }}
-        run: echo "version=$(npm view "${PKG}@${MAJOR}" version)" >> "$GITHUB_OUTPUT"
+        run: |
+          # For a major range npm lists every matching version; --json + jq takes
+          # the newest as a single clean value (a bare `npm view` returns multiple
+          # lines and corrupts $GITHUB_OUTPUT).
+          VER="$(npm view "${PKG}@${MAJOR}" version --json | jq -r 'if type=="array" then .[-1] else . end')"
+          echo "Resolved ${PKG}@${MAJOR} -> ${VER}"
+          echo "version=$VER" >> "$GITHUB_OUTPUT"
 
       # On scheduled runs, skip entirely if that exact version is already published.
       # Pushes and manual runs always build (Dockerfile changes / force-refresh).
