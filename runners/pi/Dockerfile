@@ -5,6 +5,14 @@ RUN apt-get update \
      iputils-ping dnsutils procps less vim nano jq unzip sudo \
   && rm -rf /var/lib/apt/lists/*
 
+# Default git identity so an agent's `git commit` doesn't fail with "Please
+# tell me who you are". This is only a fallback: the README launchers
+# forward the host's real identity via GIT_AUTHOR_NAME/EMAIL and
+# GIT_COMMITTER_NAME/EMAIL, which git reads natively and which take
+# precedence over this system-level config.
+RUN git config --system user.name "Pi Runner" \
+  && git config --system user.email "pi-runner@localhost"
+
 # Install uv so MCP servers shipped as Python packages can be launched with
 # `uvx` (e.g. `uvx some-mcp-server`). node:24-bookworm provides npm/npx but no
 # Python toolchain, so without uv a `uv`/`uvx`-based MCP server fails to start.
