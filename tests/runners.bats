@@ -81,3 +81,18 @@ setup() { REPO="$BATS_TEST_DIRNAME/.."; }
   grep -q "claude-box()" "$REPO/README.md"
   grep -q "ghcr.io" "$REPO/README.md"
 }
+
+@test "every runner sets a fallback git identity (system config)" {
+  for df in "$REPO"/runners/*/Dockerfile; do
+    grep -q 'git config --system user.name' "$df"
+    grep -q 'git config --system user.email' "$df"
+  done
+}
+
+@test "README launchers forward the host's real git identity" {
+  grep -q '_git_ident_env()' "$REPO/README.md"
+  grep -q 'GIT_AUTHOR_NAME=' "$REPO/README.md"
+  grep -q 'GIT_COMMITTER_NAME=' "$REPO/README.md"
+  # One definition + one call site per launcher (pi-box, claude-box, codex-box).
+  [ "$(grep -c '_git_ident_env' "$REPO/README.md")" -eq 4 ]
+}
