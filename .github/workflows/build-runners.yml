@@ -1,0 +1,109 @@
+name: build-runners
+
+# Build the agent runner images and publish them to GitHub Container Registry
+# (ghcr.io/<owner>/<agent>-runner). Free on public repos (unlimited Actions
+# minutes + free GHCR storage/bandwidth). The owner is derived automatically.
+#
+# Multi-arch: amd64 for Linux hosts and arm64 for Apple-silicon Macs (where msb
+# boots arm64 microVMs). The arm64 leg builds under QEMU emulation (slower).
+#
+# Each image is tagged with the agent's exact version (e.g. claude-runner:2.1.193)
+# plus :latest and :sha-<commit>. The daily schedule is *version-gated*: it looks
+# up the newest release on npm and only rebuilds when that version tag isn't
+# already published — so unchanged days cost a cheap lookup, not a full rebuild.
+# Builds run on a fresh runner with no layer cache, so a build always installs
+# the newest matching release (the Dockerfiles pin a major: @0 / @2).
+
+on:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '0 6 * * *'   # daily version check
+  workflow_dispatch:        # manual force-rebuild
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+      - name: Run tests
+        run: bats tests/
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { agent: pi,     pkg: '@earendil-works/pi-coding-agent', major: '0' }
+          - { agent: claude, pkg: '@anthropic-ai/claude-code',       major: '2' }
+          - { agent: codex,  pkg: '@openai/codex',                   major: '0' }
+    steps:
+      - uses: actions/checkout@v4
+
+      # GHCR requires a lowercase image path; owners can contain capitals.
+      - name: Lowercase owner
+        run: echo "OWNER_LC=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_ENV"
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The newest release of the pinned major line, e.g. claude-code@2 -> 2.1.193.
+      - name: Resolve latest agent version
+        id: ver
+        env:
+          PKG: ${{ matrix.pkg }}
+          MAJOR: ${{ matrix.major }}
+        run: echo "version=$(npm view "${PKG}@${MAJOR}" version)" >> "$GITHUB_OUTPUT"
+
+      # On scheduled runs, skip entirely if that exact version is already published.
+      # Pushes and manual runs always build (Dockerfile changes / force-refresh).
+      - name: Decide whether to build
+        id: gate
+        env:
+          EVENT: ${{ github.event_name }}
+          IMG: ghcr.io/${{ env.OWNER_LC }}/${{ matrix.agent }}-runner
+          VER: ${{ steps.ver.outputs.version }}
+        run: |
+          if [ "$EVENT" = "schedule" ] && docker buildx imagetools inspect "$IMG:$VER" >/dev/null 2>&1; then
+            echo "$IMG:$VER already published — nothing to do."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "Building $IMG:$VER."
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Tags & labels
+        id: meta
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.OWNER_LC }}/${{ matrix.agent }}-runner
+          tags: |
+            type=raw,value=${{ steps.ver.outputs.version }}
+            type=raw,value=latest
+            type=sha
+
+      - name: Build & push
+        if: steps.gate.outputs.build == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: runners/${{ matrix.agent }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}

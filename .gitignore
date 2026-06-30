@@ -1,0 +1,10 @@
+# .gitignore
+/tmp-ws/
+*.tar
+
+# personal repo-dev container (not part of the project)
+/.devcontainer/
+# local Claude Code settings
+/.claude/
+# historical design notes, kept locally but not published
+/docs/
