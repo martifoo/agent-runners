@@ -21,11 +21,13 @@ needed to build images locally.
 
    # Each launcher forwards only the API keys you've actually exported, and
    # re-pulls the latest image each run (--pull always; set _PULL=if-missing to
-   # use the cached image / work offline). Each also forwards your real git
+   # use the cached image / work offline). Each also forwards your git
    # identity (from `git config user.name`/`user.email`) via GIT_AUTHOR_*/
    # GIT_COMMITTER_* env vars, which git reads natively — so commits made
-   # inside the sandbox are attributed to you instead of the image's
-   # "<agent> Runner" fallback identity.
+   # inside the sandbox are attributed to you. If your host has no git
+   # identity configured, `git commit` inside the sandbox will fail with
+   # "Please tell me who you are" — set one with `git config --global
+   # user.name/user.email` on the host.
    _git_ident_env() {
      local name email
      name="$(git config --get user.name 2>/dev/null)"
