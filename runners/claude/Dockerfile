@@ -1,9 +1,18 @@
 FROM node:24-bookworm
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-     bash curl wget ca-certificates git ripgrep fd-find \
+     bash curl wget ca-certificates git ripgrep fd-find python3 \
      iputils-ping dnsutils procps less vim nano jq unzip sudo \
   && rm -rf /var/lib/apt/lists/*
+
+# Install uv so MCP servers shipped as Python packages can be launched with
+# `uvx` (e.g. `uvx some-mcp-server`). node:24-bookworm provides npm/npx but no
+# Python toolchain, so without uv a `uv`/`uvx`-based MCP server fails to start.
+# python3 (above) gives uv a system interpreter so it need not fetch a managed
+# one on first run. The installer drops binaries in /root/.local/bin.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
 # NOTE: no --ignore-scripts: claude-code ships a native binary that its
 # postinstall script fetches; skipping scripts leaves a non-runnable stub.
 RUN npm install -g @anthropic-ai/claude-code@2

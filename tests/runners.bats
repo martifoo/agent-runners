@@ -8,6 +8,16 @@ setup() { REPO="$BATS_TEST_DIRNAME/.."; }
   grep -q '@openai/codex@0'                   "$REPO/runners/codex/Dockerfile"
 }
 
+@test "every runner installs uv (+python3) so uvx-based MCP servers can start" {
+  # node:24-bookworm ships npm/npx but no Python toolchain, so uv must be added
+  # explicitly for `uvx some-mcp-server` to work; python3 backs it.
+  for df in "$REPO"/runners/*/Dockerfile; do
+    grep -q 'astral.sh/uv/install.sh' "$df"
+    grep -q 'ENV PATH="/root/.local/bin:${PATH}"' "$df"
+    grep -q 'python3' "$df"
+  done
+}
+
 @test "codex entrypoint auto-logs-in with OPENAI_API_KEY but still allows subscription" {
   df="$REPO/runners/codex/Dockerfile"
   # Uses an entrypoint shim (not bare codex) so the key path is handled.
