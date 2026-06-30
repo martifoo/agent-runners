@@ -8,6 +8,12 @@ setup() { REPO="$BATS_TEST_DIRNAME/.."; }
   grep -q '@openai/codex@0'                   "$REPO/runners/codex/Dockerfile"
 }
 
+@test "every runner installs the GitHub CLI (gh)" {
+  for df in "$REPO"/runners/*/Dockerfile; do
+    grep -qE '^\s*bash curl wget ca-certificates git gh ' "$df"
+  done
+}
+
 @test "every runner installs uv (+python3) so uvx-based MCP servers can start" {
   # node:24-bookworm ships npm/npx but no Python toolchain, so uv must be added
   # explicitly for `uvx some-mcp-server` to work; python3 backs it.

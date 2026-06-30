@@ -1,7 +1,7 @@
 FROM node:24-bookworm
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
-     bash curl wget ca-certificates git ripgrep fd-find python3 \
+     bash curl wget ca-certificates git gh ripgrep fd-find python3 \
      iputils-ping dnsutils procps less vim nano jq unzip sudo \
   && rm -rf /var/lib/apt/lists/*
 
