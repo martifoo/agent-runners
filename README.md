@@ -21,13 +21,26 @@ needed to build images locally.
 
    # Each launcher forwards only the API keys you've actually exported, and
    # re-pulls the latest image each run (--pull always; set _PULL=if-missing to
-   # use the cached image / work offline).
+   # use the cached image / work offline). Each also forwards your real git
+   # identity (from `git config user.name`/`user.email`) via GIT_AUTHOR_*/
+   # GIT_COMMITTER_* env vars, which git reads natively — so commits made
+   # inside the sandbox are attributed to you instead of the image's
+   # "<agent> Runner" fallback identity.
+   _git_ident_env() {
+     local name email
+     name="$(git config --get user.name 2>/dev/null)"
+     email="$(git config --get user.email 2>/dev/null)"
+     [ -n "$name" ]  && e+=(--env GIT_AUTHOR_NAME="$name" --env GIT_COMMITTER_NAME="$name")
+     [ -n "$email" ] && e+=(--env GIT_AUTHOR_EMAIL="$email" --env GIT_COMMITTER_EMAIL="$email")
+   }
+
    pi-box() {
      local -a e=()
      [ -n "$ANTHROPIC_API_KEY" ]  && e+=(--env ANTHROPIC_API_KEY)
      [ -n "$OPENAI_API_KEY" ]     && e+=(--env OPENAI_API_KEY)
      [ -n "$GEMINI_API_KEY" ]     && e+=(--env GEMINI_API_KEY)
      [ -n "$OPENROUTER_API_KEY" ] && e+=(--env OPENROUTER_API_KEY)
+     _git_ident_env
      msb run "${_REG}pi-runner" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
        --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" -- "$@"
    }
@@ -36,6 +49,7 @@ needed to build images locally.
      local -a e=(--env IS_SANDBOX=1)
      [ -n "$ANTHROPIC_API_KEY" ]       && e+=(--env ANTHROPIC_API_KEY)
      [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && e+=(--env CLAUDE_CODE_OAUTH_TOKEN)
+     _git_ident_env
      msb run "${_REG}claude-runner" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
        --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" -- "$@"
    }
@@ -43,6 +57,7 @@ needed to build images locally.
    codex-box() {
      local -a e=()
      [ -n "$OPENAI_API_KEY" ] && e+=(--env OPENAI_API_KEY)
+     _git_ident_env
      msb run "${_REG}codex-runner" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
        --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" -- "$@"
    }
