@@ -5,19 +5,13 @@ RUN apt-get update \
      iputils-ping dnsutils procps less vim nano jq unzip sudo \
   && rm -rf /var/lib/apt/lists/*
 
-# Install uv so MCP servers shipped as Python packages can be launched with
-# `uvx` (e.g. `uvx some-mcp-server`). node:24-bookworm provides npm/npx but no
-# Python toolchain, so without uv a `uv`/`uvx`-based MCP server fails to start.
-# python3 (above) gives uv a system interpreter so it need not fetch a managed
-# one on first run. The installer drops binaries in /root/.local/bin.
+# uv lets uvx-based Python MCP servers launch (node:24 has no Python toolchain).
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
 RUN npm install -g --ignore-scripts @earendil-works/pi-coding-agent@0
 
-# Pre-trust mounted projects so pi skips its first-run "trust this folder?"
-# prompt. Acceptable because the msb microVM is the isolation boundary (same
-# rationale as the claude/codex runners pre-trusting /workspace).
+# Pre-trust mounted projects; the msb microVM is the isolation boundary.
 RUN mkdir -p /root/.pi/agent && cat > /root/.pi/agent/settings.json <<'JSON'
 {
   "defaultProjectTrust": "always"

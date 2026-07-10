@@ -19,9 +19,8 @@ needed to build images locally.
    ```bash
    _REG="ghcr.io/martifoo/"
 
-   # Each launcher forwards only the API keys you've actually exported, and
-   # re-pulls the latest image each run (--pull always; set _PULL=if-missing to
-   # use the cached image / work offline).
+   # Each launcher forwards the API keys / tokens you've exported. For another pi
+   # provider, add its --env line below.
    pi-box() {
      local -a e=()
      [ -n "$ANTHROPIC_API_KEY" ]  && e+=(--env ANTHROPIC_API_KEY)
@@ -32,6 +31,10 @@ needed to build images locally.
        --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" -- "$@"
    }
 
+   # For your Claude subscription, run `claude setup-token` once and export the
+   # CLAUDE_CODE_OAUTH_TOKEN it prints. For API billing, export ANTHROPIC_API_KEY.
+   # Do not mount ~/.claude/.credentials.json. Its rotating OAuth session breaks
+   # when a sandbox writes to it.
    claude-box() {
      local -a e=(--env IS_SANDBOX=1)
      [ -n "$ANTHROPIC_API_KEY" ]       && e+=(--env ANTHROPIC_API_KEY)
@@ -48,11 +51,10 @@ needed to build images locally.
    }
    ```
 
-   Each run re-pulls `:latest`, so you stay current with what CI publishes. When
-   the image hasn't changed that's just a quick manifest check — `msb` reuses the
-   layers it already has, no re-download. (The conditional `--env` lines matter:
-   `msb` errors on an unset variable, so each launcher forwards only the keys you
-   actually set.)
+   Each run re-pulls `:latest`, reusing cached layers when the image is unchanged.
+   The `--env` guards are required because `msb` errors on an unset variable, so
+   each launcher forwards only the keys you've set. Credentials always travel via
+   env. No host files are mounted into the throwaway VM.
 
 ## Use
 
