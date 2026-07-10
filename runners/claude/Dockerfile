@@ -5,39 +5,23 @@ RUN apt-get update \
      iputils-ping dnsutils procps less vim nano jq unzip sudo \
   && rm -rf /var/lib/apt/lists/*
 
-# Install uv so MCP servers shipped as Python packages can be launched with
-# `uvx` (e.g. `uvx some-mcp-server`). node:24-bookworm provides npm/npx but no
-# Python toolchain, so without uv a `uv`/`uvx`-based MCP server fails to start.
-# python3 (above) gives uv a system interpreter so it need not fetch a managed
-# one on first run. The installer drops binaries in /root/.local/bin.
+# uv lets uvx-based Python MCP servers launch (node:24 has no Python toolchain).
 RUN curl -LsSf https://astral.sh/uv/install.sh | sh
 ENV PATH="/root/.local/bin:${PATH}"
 
-# NOTE: no --ignore-scripts: claude-code ships a native binary that its
-# postinstall script fetches; skipping scripts leaves a non-runnable stub.
+# No --ignore-scripts: the postinstall fetches a native binary; skipping it
+# leaves a non-runnable stub.
 RUN npm install -g @anthropic-ai/claude-code@2
 
-# Claude Code refuses --dangerously-skip-permissions (bypass-permissions mode)
-# when running as root "for security reasons". This image runs as root inside
-# the msb microVM, which is itself the isolation boundary, so we declare the
-# sandbox with IS_SANDBOX=1 — the supported override that lets bypass mode run
-# as root. The launcher (claude-box) also passes --env IS_SANDBOX=1, since msb
-# does not propagate image ENV into the microVM.
+# Claude Code refuses bypass-permissions mode as root. IS_SANDBOX=1 is the
+# supported override. claude-box re-passes it because msb drops image ENV.
 ENV IS_SANDBOX=1
 
-# Pre-seed Claude Code state so the first run skips the interactive setup:
-# the theme picker, onboarding, the /workspace "trust this folder" prompt, and
-# the one-time "Bypass Permissions mode" acceptance warning
-# (bypassPermissionsModeAccepted, paired with the bypass default below).
-# Keys verified against the claude-code 2.x config schema (~/.claude.json).
-#
-# Security note: hasTrustDialogAccepted pre-trusts /workspace and bypass mode
-# runs tools without prompts, so a mounted repo's code/config/hooks execute
-# without confirmation. This is acceptable here ONLY because the agent runs
-# inside a microsandbox microVM (the isolation boundary). Residual risk:
-# /workspace is a bind mount from the host and network egress is open by default
-# — a hostile repo could touch those. Harden per-run with msb network rules
-# (e.g. --no-net / --net-rule) or a read-only mount if you run untrusted code.
+# Pre-seed state to skip first-run setup: theme, onboarding, /workspace trust,
+# and the bypass-mode acceptance. A pre-trusted /workspace runs a mounted repo's
+# code without prompts, safe only because the microVM is the isolation boundary.
+# /workspace is a host bind mount and egress is open, so harden untrusted code
+# per-run with msb network rules or a read-only mount.
 RUN cat > /root/.claude.json <<'JSON'
 {
   "hasCompletedOnboarding": true,
@@ -52,10 +36,8 @@ RUN cat > /root/.claude.json <<'JSON'
 }
 JSON
 
-# Default to bypass-permissions mode so the agent runs tools without per-action
-# prompts — appropriate because the microVM is the isolation boundary (and root
-# bypass is unlocked by IS_SANDBOX=1, which the claude-box launcher passes).
-# Override per run: `claude-box --permission-mode default` (a CLI flag wins).
+# Default to bypass-permissions mode so the agent runs without per-action prompts.
+# Override per run with `claude-box --permission-mode default`.
 RUN mkdir -p /root/.claude && cat > /root/.claude/settings.json <<'JSON'
 {
   "permissions": { "defaultMode": "bypassPermissions" }
