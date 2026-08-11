@@ -148,20 +148,28 @@ chmod 600 ~/.agent-runner/startup.sh   # it may hold secrets
 git config --global user.name  "Your Name"
 git config --global user.email "you@example.com"
 export OPENROUTER_API_KEY=…
+export GH_TOKEN=…   # `gh auth token`, or a PAT — see the note on gh below
 ```
 
 ```
 # ~/.agent-runner/manifest
 ~/.gitconfig:/root/.gitconfig
-~/.config/gh:/root/.config/gh
 ```
 
-With the `gh` line above and `gh auth setup-git` added to `startup.sh`,
-`git push` works over HTTPS using your existing `gh` login. Any other git host
-works the same way through a credential helper set up in `startup.sh`. For SSH
-remotes, add a key to `manifest` — use a dedicated deploy key rather than a
-personal one, since the agent runs without permission prompts and can use any
-key copied in.
+`GH_TOKEN` is the reliable way to carry a GitHub login in: `gh` and its
+git-credential helper both read it directly, and `git push` over HTTPS then
+works out of the box. Copying `~/.config/gh` into `manifest` looks like it
+should work too, but doesn't on a host where `gh` stores its real token in a
+system keyring (the macOS default) — the config directory alone has no
+credential in it, and authentication silently fails inside the sandbox. It
+only carries a working login where `gh` keeps its token in plaintext (e.g.
+Linux without a keyring); check with `gh auth status` — `(keyring)` in the
+output means `GH_TOKEN` is the path to use.
+
+Any other git host works the same way through a credential helper set up in
+`startup.sh`. For SSH remotes, add a key to `manifest` — use a dedicated
+deploy key rather than a personal one, since the agent runs without
+permission prompts and can use any key copied in.
 
 A manifest source can be a symlink (e.g. under a dotfile manager); it is
 resolved to its real path before anything is copied.
