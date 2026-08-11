@@ -18,8 +18,8 @@ per-user setup to persist. Concretely:
 
 `~/.agent-runner/` on the host holds two files:
 
-- **`startup.sh`** — sourced by the entrypoint before the agent starts. Env
-  vars, git identity, package installs.
+- **`startup.sh`** — sourced before the agent starts. Env vars, git identity,
+  package installs.
 - **`manifest`** — a `source:destination` list, one pair per line. Each line
   names a host path and the exact path it lands at inside the VM.
 
@@ -42,28 +42,40 @@ git config --global user.email "you@example.com"
 apt-get install -y --no-install-recommends some-tool >/dev/null
 ```
 
-`msb run` patches the VM rootfs before boot via `--copy-file`/`--copy-dir`, one
-pair per manifest line, plus `startup.sh` itself. The copy is one-directional:
-writes inside the VM never reach the host file, so copying credentials in is
-safe in a way a bind mount would not be.
+The entire mechanism lives in the host launcher functions — no image change,
+no rebuild. `msb run` supports this directly:
 
-Nothing enters the VM beyond what `manifest` and `startup.sh` name. There is no
-other file, subdirectory, or convention inside `~/.agent-runner/`.
+- **`--script-path NAME:PATH`** registers a host file as an executable script
+  at `/.msb/scripts/NAME` inside the guest, before boot.
+- **`--copy-file`/`--copy-dir SRC:DST`** patches a host file or directory into
+  the guest rootfs before boot, at an exact destination path.
+- **`--entrypoint`** overrides the image's entrypoint outright.
+
+The launcher passes `startup.sh` via `--script-path`, each manifest line via
+`--copy-file`/`--copy-dir`, and overrides the entrypoint with a small inline
+`sh -c` wrapper that sources the script (if present) and then execs the real
+agent binary, forwarding all arguments. This works unmodified against the
+already-published images.
+
+All of this is one-directional: writes inside the VM never reach the host
+file, so copying credentials in is safe in a way a bind mount would not be.
+Nothing enters the VM beyond what `manifest` and `startup.sh` name.
 
 ## Launcher changes
 
-A shared function reads `manifest` and emits the `msb` flags; each `*-box`
-function calls it once.
+Two shared functions, called from all three `*-box` functions.
 
 ```bash
-# Defined once; called from claude-box / codex-box / pi-box.
-# Emits --copy-file/--copy-dir flags, one pair per manifest line, plus
-# startup.sh itself. Fails loudly if a listed source does not exist.
-_agent_runner_copy_flags() {
-  local -n _out=$1   # nameref: caller's array, filled in place
-  _out=()
-  [ -f "$HOME/.agent-runner/startup.sh" ] && _out+=(
-    --copy-file "$HOME/.agent-runner/startup.sh:/root/.agent-runner/startup.sh")
+# Fills the global array _AGENT_RUNNER_FLAGS with --script-path (for
+# startup.sh) and --copy-file/--copy-dir (one pair per manifest line).
+# A plain global, not a nameref return (bash's nameref-local flag) — that syntax is
+# bash-only and this code must also run under zsh, since the README installs
+# it into either ~/.zshrc or ~/.bashrc. Fails loudly if a listed source does
+# not exist.
+_agent_runner_flags() {
+  _AGENT_RUNNER_FLAGS=()
+  [ -f "$HOME/.agent-runner/startup.sh" ] && \
+    _AGENT_RUNNER_FLAGS+=(--script-path "startup:$HOME/.agent-runner/startup.sh")
   local manifest_file="$HOME/.agent-runner/manifest"
   [ -f "$manifest_file" ] || return 0
   local line src dst real
@@ -71,49 +83,96 @@ _agent_runner_copy_flags() {
     case "$line" in ''|'#'*) continue ;; esac
     src="${line%%:*}"; dst="${line#*:}"
     src="${src/#\~/$HOME}"
-    real="$(realpath -e -- "$src")" || {
+    real="$(readlink -f -- "$src")" || {
       echo "agent-runner: manifest entry not found: $src" >&2; return 1; }
-    if [ -d "$real" ]; then _out+=(--copy-dir  "$real:$dst")
-    else                    _out+=(--copy-file "$real:$dst")
+    if [ -d "$real" ]; then _AGENT_RUNNER_FLAGS+=(--copy-dir  "$real:$dst")
+    else                    _AGENT_RUNNER_FLAGS+=(--copy-file "$real:$dst")
     fi
   done < "$manifest_file"
 }
 
+# Prints the --entrypoint wrapper body for one agent. codex additionally
+# needs its OPENAI_API_KEY auto-login, which used to live baked into its
+# image; it now lives here, since --entrypoint replaces the image's own
+# entrypoint outright.
+_agent_runner_wrapper() {
+  local agent="$1" extra=""
+  [ "$agent" = codex ] && extra='
+if [ -n "${OPENAI_API_KEY:-}" ] && ! codex login status >/dev/null 2>&1; then
+  printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null 2>&1 || true
+fi'
+  printf '%s\n' \
+"INIT=/.msb/scripts/startup
+if [ -f \"\$INIT\" ]; then
+  . \"\$INIT\" || { echo \"agent-runner: startup.sh failed (\$?)\" >&2; exit 1; }
+fi${extra}
+exec ${agent} \"\$@\""
+}
+
 claude-box() {
-  local -a e=(--env IS_SANDBOX=1) c=()
+  local -a e=(--env IS_SANDBOX=1)
   [ -n "$ANTHROPIC_API_KEY" ]       && e+=(--env ANTHROPIC_API_KEY)
   [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && e+=(--env CLAUDE_CODE_OAUTH_TOKEN)
-  _agent_runner_copy_flags c || return 1
+  _agent_runner_flags || return 1
 
   msb run "${_REG}claude-runner" -t --pull "${_PULL:-always}" \
     -w /workspace --volume "$PWD:/workspace" \
-    --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${c[@]}" -- "$@"
+    --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${_AGENT_RUNNER_FLAGS[@]}" \
+    --entrypoint /bin/sh -- -c "$(_agent_runner_wrapper claude)" agent-entry "$@"
 }
 ```
 
-`codex-box` and `pi-box` gain the same two lines (`local -a c=()` /
-`_agent_runner_copy_flags c || return 1`) before their existing `msb run`.
-Nothing is written to disk on the host beyond what is already there.
+`codex-box` and `pi-box` follow the same shape: call `_agent_runner_flags`,
+then pass `"${_AGENT_RUNNER_FLAGS[@]}"` plus `--entrypoint /bin/sh -- -c
+"$(_agent_runner_wrapper codex)" agent-entry "$@"` (or `pi`) to their existing
+`msb run`. `agent-entry` is a throwaway `$0` placeholder — `sh -c 'script' $0
+$1 $2...` needs one positional before the args that are meant to reach the
+script's `"$@"`.
 
-### Why per-entry resolution
+### Why `readlink -f`, not `realpath -e`
 
-`msb --copy-dir`/`--copy-file` preserve symlinks instead of following them:
+The original design used `realpath -e`. On this project's actual target
+(macOS, launchers pasted into `~/.zshrc`), that is wrong on two counts, both
+found by testing on a real machine rather than assumed from general
+knowledge:
 
-```console
-$ mkdir -p /tmp/t && ln -sf ~/.gitconfig /tmp/t/gc
-$ msb run ubuntu --copy-dir /tmp/t:/root/t -- ls -l /root/t
-lrwxrwxrwx 1 root root 24 Jan  1  1970 gc -> /Users/smarti/.gitconfig
-```
+- macOS's `/usr/bin/realpath` is the BSD variant and does not support `-e` —
+  it errors with `illegal option -- e`. `readlink -f` is present on both BSD
+  and GNU userlands, resolves symlinks the same way, and fails (exit 1, no
+  output) on a missing or dangling path — the same contract `-e` would have
+  given.
+- `msb --copy-dir`/`--copy-file` preserve symlinks instead of following them
+  (confirmed: copying a directory containing a symlink into a guest leaves a
+  dangling link whose target doesn't exist there). Resolving each manifest
+  entry with `readlink -f` before it reaches `msb` sidesteps this — `msb` only
+  ever receives a path that is already real, whether the manifest entry
+  itself is a symlink (common under dotfile managers) or points at one.
 
-The link survives, its target does not exist in the VM, and every read fails
-with `ENOENT`. `realpath -e` on each manifest entry resolves this at the
-source: `msb` only ever receives a path that is already real, whether the
-manifest entry itself is a symlink (common under dotfile managers) or points at
-one.
+### Why a global array, not a nameref
 
-`realpath -e` fails on a missing or dangling path, which aborts the launch with
-a clear message rather than booting a VM with a broken credential path. `-e` is
-the same flag on GNU and macOS's `/usr/bin/realpath`.
+The launcher functions are pasted into `~/.zshrc` or `~/.bashrc`, so they run
+under zsh as often as bash. `local -n` (bash's nameref, the usual way to have
+a helper function fill a caller-supplied array) is bash-only; under zsh it
+fails immediately with `bad option: -n`. `_agent_runner_flags` instead fills
+one well-known global array, `_AGENT_RUNNER_FLAGS`, which both shells support
+identically.
+
+### Why `--entrypoint` instead of a Dockerfile shim
+
+An earlier version of this design baked a `claude-entry`/`codex-entry`/
+`pi-entry` shim into each image, sourcing `startup.sh` before `exec`-ing the
+agent, with `ENTRYPOINT` pointed at the shim. `msb run --entrypoint` replaces
+that outright: the launcher can override the image's entrypoint at the CLI
+level, so the exact same "source, then exec" wrapper can be supplied inline,
+per invocation, with no image change. Verified end-to-end on a real machine:
+`--script-path` places the file, sourcing it inside an `--entrypoint /bin/sh
+-c '...'` wrapper makes its exports visible to the final `exec`, a failing
+script aborts before that `exec` runs, and arguments containing spaces
+(`-p "hello world"`) survive the `sh -c 'script' $0 "$@"` hop intact.
+
+This also means the mechanism works against images that are already published
+— no waiting on a CI rebuild — and `runners/codex/Dockerfile`'s existing
+`codex-entry` shim becomes redundant. It is removed; see Scope.
 
 The existing `--env` guards stay, as an override for CI and already-exported
 shells.
@@ -171,34 +230,6 @@ The general rule: any tool with a fixed config path (`az`, `gh`, `kubectl`'s
 kubeconfig, SSH) needs one manifest line per path. Tools that accept a
 non-interactive login via environment variables need none.
 
-## Entrypoint shims
-
-`ENTRYPOINT ["claude"]` starts the agent directly — there is no login shell, so
-`~/.bashrc` and `~/.profile` are never read. A shim is the hook point. Codex
-already has one (`codex-entry`); claude and pi each get an equivalent.
-
-```sh
-#!/usr/bin/env sh
-INIT=/root/.agent-runner/startup.sh
-if [ -f "$INIT" ]; then
-  . "$INIT" || { echo "agent-runner: startup.sh failed ($?)" >&2; exit 1; }
-fi
-exec claude "$@"
-```
-
-Files placed via `manifest` without a `startup.sh` present is valid — the
-guard skips sourcing, and the files are still there at their configured
-destinations for the agent to use.
-
-- **Sourced, not executed.** A subprocess would lose every `export`, which is
-  the main thing the file is for.
-- **Abort on failure.** Running the agent with a half-applied environment is
-  worse than a clear error.
-
-For codex, the source happens **before** the existing
-`codex login --with-api-key` branch, since `startup.sh` may be what exports
-`OPENAI_API_KEY`.
-
 ## Cost
 
 Nothing the agent creates survives the run, and `startup.sh` re-runs on every
@@ -208,8 +239,9 @@ keeping the runner throwaway.
 The mechanism is agnostic about its contents: the file is sourced as-is, and
 whether it installs a package, only exports a key, or does nothing is the
 user's call. The existing "Build an image yourself" route
-(`runners/<agent>/Dockerfile` + `msb load`) composes with this — a custom image
-launched with `_REG=""` still picks up `startup.sh`.
+(`runners/<agent>/Dockerfile` + `msb load`) composes with this — a custom
+image launched with `_REG=""` still picks up `startup.sh`, since the wrapper
+comes from the launcher, not the image.
 
 A persistent home volume and a launcher-driven derived-image build were both
 considered and are out of scope: the first would end the runner's throwaway
@@ -219,9 +251,10 @@ make Docker a hard runtime dependency of the launchers. The manual
 
 ## Security
 
-`startup.sh` is a host file sourced as root inside a VM that runs the agent
-without permission prompts. It is not agent-writable, since the copy is
-one-directional.
+`startup.sh` is a host file, registered via `--script-path` and sourced as
+root inside a VM that runs the agent without permission prompts. It is not
+agent-writable: `--script-path` and `--copy-file`/`--copy-dir` all patch the
+rootfs before boot, one-directionally.
 
 The security surface is exactly `manifest` plus `startup.sh`: nothing enters
 the VM that isn't named in one of the two.
@@ -239,23 +272,31 @@ scope: it would auto-execute code from a checked-out repository.
 `tests/runners.bats` is a Dockerfile/README linter — it cannot boot a VM, and
 `msb` is not available in CI. Coverage is structural:
 
-- every runner has an entrypoint shim, and `ENTRYPOINT` points at it
-- every shim sources `/root/.agent-runner/startup.sh` guarded by an existence
-  check, and aborts non-zero on failure
-- the codex shim sources `startup.sh` before its `codex login` branch
-- the README documents `~/.agent-runner/startup.sh`, `~/.agent-runner/manifest`,
-  and its `source:destination` format
-- every launcher calls the shared `_agent_runner_copy_flags` rather than
-  inlining its own list-parsing loop
-- `_agent_runner_copy_flags` resolves each entry through `realpath -e` before
-  building `--copy-file`/`--copy-dir` flags
+- the README defines both `_agent_runner_flags` and `_agent_runner_wrapper`,
+  and all three `*-box` functions call both
+- `_agent_runner_flags` resolves manifest entries with `readlink -f`, not
+  `realpath`/`local -n` (the two constructs found not to work on the actual
+  target: macOS's BSD `realpath` and zsh, respectively)
+- `_agent_runner_wrapper` sources `/.msb/scripts/startup` guarded by an
+  existence check and aborts non-zero on failure
+- the codex branch of `_agent_runner_wrapper` places the `OPENAI_API_KEY`
+  login check before `exec codex "$@"`
+- `runners/codex/Dockerfile` no longer defines `codex-entry`; its
+  `ENTRYPOINT` is the bare `["codex"]`, matching `claude`/`pi`
 
-Not covered by CI, and needing one manual smoke test on a host with `msb`:
-`realpath -e` behaving the same on the target macOS version, and a
-manifest-carried credential actually authenticating (`git push`, `az`, `gh`).
+Verified by hand already, on a real machine, under zsh (not assumed): every
+one of the mechanisms above — `--script-path` placement, env export surviving
+the `sh -c` hop into `exec`, abort-on-failure in both its forms (explicit
+`exit N` inside the sourced script vs. falling off the end with a failing last
+command), argument boundaries surviving `sh -c 'script' $0 "$@"` intact
+(`-p "hello world"` arrives as one argument), and the codex login branch in
+both its states (key set + not logged in vs. already logged in). Still needing
+a manual check on a real host: a `manifest`-carried credential actually
+authenticating against a live host (`git push`, `az`, `gh`), since that
+depends on account state this session doesn't have.
 
 ## Scope
 
-`runners/{claude,codex,pi}/Dockerfile`, `tests/runners.bats`, `README.md`.
-No CI workflow change: the shims stay as heredocs, so no new file enters the
-per-runner build context.
+`runners/codex/Dockerfile` (remove the now-redundant `codex-entry` shim;
+`claude`/`pi` need no Dockerfile change at all), `tests/runners.bats`,
+`README.md`. No CI workflow change.
