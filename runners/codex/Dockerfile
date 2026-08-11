@@ -13,18 +13,6 @@ ENV PATH="/root/.local/bin:${PATH}"
 # leaves a non-runnable stub.
 RUN npm install -g @openai/codex@0
 
-# Entrypoint shim: Codex needs an auth.json, not just OPENAI_API_KEY. If the key
-# is set and no login exists, log in with it. Otherwise fall through to Codex's
-# ChatGPT subscription login. An existing login is never overwritten.
-RUN cat > /usr/local/bin/codex-entry <<'SH'
-#!/usr/bin/env sh
-if [ -n "${OPENAI_API_KEY:-}" ] && ! codex login status >/dev/null 2>&1; then
-  printenv OPENAI_API_KEY | codex login --with-api-key >/dev/null 2>&1 || true
-fi
-exec codex "$@"
-SH
-RUN chmod +x /usr/local/bin/codex-entry
-
 # Disable Codex's inner bubblewrap sandbox and rely on the microVM boundary.
 # This runs commands without an inner sandbox, safe only because the microVM
 # isolates the host. /workspace is a host bind mount and egress is open, so
@@ -38,4 +26,4 @@ trust_level = "trusted"
 TOML
 
 WORKDIR /workspace
-ENTRYPOINT ["/usr/local/bin/codex-entry"]
+ENTRYPOINT ["codex"]

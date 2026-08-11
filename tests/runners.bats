@@ -24,18 +24,18 @@ setup() { REPO="$BATS_TEST_DIRNAME/.."; }
   done
 }
 
-@test "codex entrypoint auto-logs-in with OPENAI_API_KEY but still allows subscription" {
+@test "codex runner has a bare entrypoint; startup and login live in the launcher" {
   df="$REPO/runners/codex/Dockerfile"
-  # Uses an entrypoint shim (not bare codex) so the key path is handled.
-  grep -q 'ENTRYPOINT \["/usr/local/bin/codex-entry"\]' "$df"
-  # Only logs in when a key is present AND not already logged in (don't clobber
-  # a persisted subscription session); otherwise falls through to `exec codex`.
-  grep -q 'OPENAI_API_KEY' "$df"
-  grep -q 'codex login status' "$df"
-  grep -q 'codex login --with-api-key' "$df"
-  grep -q 'exec codex' "$df"
+  grep -q 'ENTRYPOINT \["codex"\]' "$df"
+  ! grep -q 'codex-entry' "$df"
+}
+
+@test "codex's OPENAI_API_KEY auto-login lives in the README wrapper, not the image" {
+  grep -q 'codex login status' "$REPO/README.md"
+  grep -q 'codex login --with-api-key' "$REPO/README.md"
   # Never forces an auth method (subscription must still work).
-  ! grep -q 'forced_login_method' "$df"
+  ! grep -q 'forced_login_method' "$REPO/README.md"
+  ! grep -q 'codex-entry' "$REPO/README.md"
 }
 
 @test "codex disables its inner sandbox (microVM is the boundary; no bubblewrap)" {
