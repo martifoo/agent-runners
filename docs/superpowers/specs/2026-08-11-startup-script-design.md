@@ -5,45 +5,31 @@ Status: approved design, not yet implemented
 
 ## Problem
 
-The runners boot a throwaway microVM per launch, so there is no place to put
-per-user setup. Three concrete gaps:
+Each runner boots a throwaway microVM per launch, so there is no place for
+per-user setup to persist. Concretely:
 
-1. **Git identity.** `git commit` inside the sandbox fails with "Please tell me
-   who you are". An earlier attempt forwarded `GIT_AUTHOR_*`/`GIT_COMMITTER_*`
-   from the host (2556252, 74ac035) and was reverted; it also never addressed
-   `git push`.
-2. **Credentials.** API keys reach the sandbox only through per-key `--env`
-   guards in each launcher, which exist because `msb` aborts on an unset
-   variable. Adding a provider means editing every launcher.
-3. **Extra packages.** There is no way to add a tool for one project without
-   forking the image.
-
-## Non-goals
-
-- **No persistent volume.** Considered and rejected: mounting a named volume at
-  `/root` shadows the images' baked-in seeding (`.claude.json`,
-  `.claude/settings.json`, `.codex/config.toml`, `.pi/agent/settings.json`) and
-  uv at `/root/.local/bin`, forcing a rewrite of all of it into runtime seeding.
-  The runner also stops being throwaway, which is its main safety property.
-- **No launcher-driven image build.** A hash-cached derived image was considered
-  for fast package installs and rejected, to avoid making Docker a hard runtime
-  dependency of the launchers. This does not touch the manual "Build an image
-  yourself" route, which stays as documented.
+1. `git commit` inside the sandbox fails with "Please tell me who you are",
+   and there is no way to push.
+2. Credentials reach the sandbox only through per-key `--env` guards in each
+   launcher. Adding a provider means editing every launcher.
+3. There is no way to add a tool for one project without forking the image.
 
 ## Concept
 
-The host holds the truth. `msb run` patches the VM rootfs before boot via
-`--copy-dir`, and the entrypoint sources what was copied in.
+`~/.agent-runner/` on the host holds two files:
 
-Key property: **`--copy-*` is one-directional.** Writes inside the VM never
-reach the host file. That is what makes copying credentials in acceptable where
-a bind mount was not — the README's current warning ("Do not mount
-`~/.claude/.credentials.json`. Its rotating OAuth session breaks when a sandbox
-writes to it") does not apply to a copy.
+- **`startup.sh`** — sourced by the entrypoint before the agent starts. Env
+  vars, git identity, package installs.
+- **`manifest`** — a `source:destination` list, one pair per line. Each line
+  names a host path and the exact path it lands at inside the VM.
 
-One host directory, `~/.agent-runner/`, shared by all three runners. It is
-copied in whole; `startup.sh` inside it is the entry point, and anything else
-placed alongside is available to that script by path.
+```
+# ~/.agent-runner/manifest
+~/.gitconfig:/root/.gitconfig
+~/.config/gh:/root/.config/gh
+~/.azure:/root/.azure
+~/.ssh/deploy_key:/root/.ssh/id_ed25519
+```
 
 ```sh
 # ~/.agent-runner/startup.sh   (chmod 600)
@@ -56,29 +42,62 @@ git config --global user.email "you@example.com"
 apt-get install -y --no-install-recommends some-tool >/dev/null
 ```
 
+`msb run` patches the VM rootfs before boot via `--copy-file`/`--copy-dir`, one
+pair per manifest line, plus `startup.sh` itself. The copy is one-directional:
+writes inside the VM never reach the host file, so copying credentials in is
+safe in a way a bind mount would not be.
+
+Nothing enters the VM beyond what `manifest` and `startup.sh` name. There is no
+other file, subdirectory, or convention inside `~/.agent-runner/`.
+
 ## Launcher changes
 
-Each `*-box` function gains a single guarded copy. The guard mirrors the
-existing `--env` ones: `msb` errors on a missing source path.
+A shared function reads `manifest` and emits the `msb` flags; each `*-box`
+function calls it once.
 
 ```bash
-local -a c=(); local s=""
-if [ -d "$HOME/.agent-runner" ]; then
-  s="$(mktemp -d)" && cp -RLp "$HOME/.agent-runner/." "$s/" || {
-    echo "agent-runner: could not stage ~/.agent-runner" >&2; rm -rf "$s"; return 1; }
-  c+=(--copy-dir "$s:/root/.agent-runner")
-fi
+# Defined once; called from claude-box / codex-box / pi-box.
+# Emits --copy-file/--copy-dir flags, one pair per manifest line, plus
+# startup.sh itself. Fails loudly if a listed source does not exist.
+_agent_runner_copy_flags() {
+  local -n _out=$1   # nameref: caller's array, filled in place
+  _out=()
+  [ -f "$HOME/.agent-runner/startup.sh" ] && _out+=(
+    --copy-file "$HOME/.agent-runner/startup.sh:/root/.agent-runner/startup.sh")
+  local manifest_file="$HOME/.agent-runner/manifest"
+  [ -f "$manifest_file" ] || return 0
+  local line src dst real
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in ''|'#'*) continue ;; esac
+    src="${line%%:*}"; dst="${line#*:}"
+    src="${src/#\~/$HOME}"
+    real="$(realpath -e -- "$src")" || {
+      echo "agent-runner: manifest entry not found: $src" >&2; return 1; }
+    if [ -d "$real" ]; then _out+=(--copy-dir  "$real:$dst")
+    else                    _out+=(--copy-file "$real:$dst")
+    fi
+  done < "$manifest_file"
+}
 
-msb run "${_REG}claude-runner" -t --pull "${_PULL:-always}" \
-  -w /workspace --volume "$PWD:/workspace" \
-  --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${c[@]}" -- "$@"
-local rc=$?; [ -n "$s" ] && rm -rf "$s"; return $rc
+claude-box() {
+  local -a e=(--env IS_SANDBOX=1) c=()
+  [ -n "$ANTHROPIC_API_KEY" ]       && e+=(--env ANTHROPIC_API_KEY)
+  [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && e+=(--env CLAUDE_CODE_OAUTH_TOKEN)
+  _agent_runner_copy_flags c || return 1
+
+  msb run "${_REG}claude-runner" -t --pull "${_PULL:-always}" \
+    -w /workspace --volume "$PWD:/workspace" \
+    --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${c[@]}" -- "$@"
+}
 ```
 
-### Why the staging copy
+`codex-box` and `pi-box` gain the same two lines (`local -a c=()` /
+`_agent_runner_copy_flags c || return 1`) before their existing `msb run`.
+Nothing is written to disk on the host beyond what is already there.
 
-`msb --copy-dir` preserves symlinks instead of following them. Verified on
-macOS with msb:
+### Why per-entry resolution
+
+`msb --copy-dir`/`--copy-file` preserve symlinks instead of following them:
 
 ```console
 $ mkdir -p /tmp/t && ln -sf ~/.gitconfig /tmp/t/gc
@@ -87,39 +106,22 @@ lrwxrwxrwx 1 root root 24 Jan  1  1970 gc -> /Users/smarti/.gitconfig
 ```
 
 The link survives, its target does not exist in the VM, and every read fails
-with `ENOENT`. Since the expected way to populate `~/.agent-runner/` is to
-symlink existing credential files into it rather than duplicate them, an
-unstaged `--copy-dir` would break the common case silently.
+with `ENOENT`. `realpath -e` on each manifest entry resolves this at the
+source: `msb` only ever receives a path that is already real, whether the
+manifest entry itself is a symlink (common under dotfile managers) or points at
+one.
 
-`cp -RLp` dereferences (`-L` follows symlinks with `-R` on both BSD/macOS and
-GNU coreutils), so the VM receives real files. The source is written as
-`"$HOME/.agent-runner/."` so the directory's *contents* land in the staging
-root; a trailing `/*` would skip dotfiles and no trailing `/.` would nest the
-result one level too deep. `mktemp -d` creates the staging directory with mode
-700, and `-p` preserves mode bits — without it a copied private key can end up
-world-readable, and `ssh` then refuses it as "permissions are too open". A
-dangling symlink makes `cp` fail, which aborts the launch with a clear message
-rather than booting a VM with a broken credential path.
+`realpath -e` fails on a missing or dangling path, which aborts the launch with
+a clear message rather than booting a VM with a broken credential path. `-e` is
+the same flag on GNU and macOS's `/usr/bin/realpath`.
 
-Open question for the smoke test: what mode and owner `msb --copy-dir` assigns
-when writing into the rootfs. If it normalises them, preserving modes during
-staging does not help and the SSH-key case needs another answer. `ls -l
-/root/.agent-runner` inside the VM settles it.
-
-One directory rather than a hardcoded list of paths is deliberate. Credential
-layouts differ per tool and per git host; enumerating them in the launcher means
-editing three shell functions every time a new one appears. With a single copy,
-the launcher never changes again — a new credential file is a symlink in the
-directory and a line in `startup.sh` that points at it.
-
-The existing `--env` guards stay, but demote from the primary credential path to
-an override for CI and already-exported shells.
+The existing `--env` guards stay, as an override for CI and already-exported
+shells.
 
 ## Git hosts
 
-Nothing here is GitHub-bound. The images ship `gh` and that stays, but it is a
-convenience, not a dependency. Any HTTPS remote works through a credential
-helper configured in `startup.sh`:
+The images ship `gh`, but nothing here is GitHub-specific. Any HTTPS remote
+works through a credential helper configured in `startup.sh`:
 
 ```sh
 export GIT_TOKEN=…
@@ -127,19 +129,53 @@ git config --global credential.helper \
   '!f(){ echo username=oauth2; echo password=$GIT_TOKEN; };f'
 ```
 
-GitHub users can instead drop their `gh` config into `~/.agent-runner/` and run
-`gh auth setup-git`. GitLab, Gitea and Bitbucket work the same way via their own
-tokens, or via `glab`/`tea` installed from `startup.sh`.
+GitHub users can instead add their `gh` config directory to `manifest`:
 
-SSH remotes work too, by placing a key in `~/.agent-runner/`. Use a dedicated
-deploy key rather than a personal key: the VM runs the agent without permission
-prompts, so any key copied in is a key that unsupervised code can use.
+```
+~/.config/gh:/root/.config/gh
+```
+
+and run `gh auth setup-git` from `startup.sh`. GitLab, Gitea and Bitbucket work
+the same way via their own tokens, or via `glab`/`tea` installed from
+`startup.sh`.
+
+SSH remotes work by adding a key to `manifest`. Use a dedicated deploy key
+rather than a personal key: the VM runs the agent without permission prompts,
+so any key copied in is a key that unsupervised code can use.
+
+## Worked example: Azure CLI
+
+`az` reads credentials only from `~/.azure/`, not from an arbitrary path, so
+it needs one of the two paths below.
+
+**Service principal** — env vars only, no manifest entry:
+
+```sh
+export AZURE_CLIENT_ID=…
+export AZURE_CLIENT_SECRET=…
+export AZURE_TENANT_ID=…
+az login --service-principal -u "$AZURE_CLIENT_ID" -p "$AZURE_CLIENT_SECRET" \
+  --tenant "$AZURE_TENANT_ID" >/dev/null
+```
+
+**An existing `az login` session** — `~/.azure/` holds `azureProfile.json`
+(account/subscriptions), `msal_token_cache.json` (the token cache),
+`clouds.config` and `config`. One manifest line places the whole directory at
+the exact path `az` expects:
+
+```
+~/.azure:/root/.azure
+```
+
+The general rule: any tool with a fixed config path (`az`, `gh`, `kubectl`'s
+kubeconfig, SSH) needs one manifest line per path. Tools that accept a
+non-interactive login via environment variables need none.
 
 ## Entrypoint shims
 
 `ENTRYPOINT ["claude"]` starts the agent directly — there is no login shell, so
-`~/.bashrc` and `~/.profile` are never read. A shim is the only hook point.
-Codex already has one (`codex-entry`); claude and pi each get an equivalent.
+`~/.bashrc` and `~/.profile` are never read. A shim is the hook point. Codex
+already has one (`codex-entry`); claude and pi each get an equivalent.
 
 ```sh
 #!/usr/bin/env sh
@@ -150,71 +186,73 @@ fi
 exec claude "$@"
 ```
 
-Copying the directory without a `startup.sh` in it is valid — the guard skips
-sourcing, and the files are still there for the agent to use.
-
-Two decisions:
+Files placed via `manifest` without a `startup.sh` present is valid — the
+guard skips sourcing, and the files are still there at their configured
+destinations for the agent to use.
 
 - **Sourced, not executed.** A subprocess would lose every `export`, which is
   the main thing the file is for.
 - **Abort on failure.** Running the agent with a half-applied environment is
   worse than a clear error.
 
-For codex, the source must happen **before** the existing
+For codex, the source happens **before** the existing
 `codex login --with-api-key` branch, since `startup.sh` may be what exports
 `OPENAI_API_KEY`.
 
 ## Cost
 
 Nothing the agent creates survives the run, and `startup.sh` re-runs on every
-launch, so whatever it does is paid for each time. That is the accepted trade
-for keeping the runner throwaway.
+launch, so whatever it does is paid for each time. That is the trade for
+keeping the runner throwaway.
 
 The mechanism is agnostic about its contents: the file is sourced as-is, and
 whether it installs a package, only exports a key, or does nothing is the
 user's call. The existing "Build an image yourself" route
-(`runners/<agent>/Dockerfile` + `msb load`) is unaffected and composes with
-this — a custom image can be launched with `_REG=""` and still picks up
-`startup.sh`. Neither path replaces the other.
+(`runners/<agent>/Dockerfile` + `msb load`) composes with this — a custom image
+launched with `_REG=""` still picks up `startup.sh`.
+
+A persistent home volume and a launcher-driven derived-image build were both
+considered and are out of scope: the first would end the runner's throwaway
+property and shadow each image's baked-in seeding at `/root`; the second would
+make Docker a hard runtime dependency of the launchers. The manual
+"Build an image yourself" route stays as documented instead.
 
 ## Security
 
 `startup.sh` is a host file sourced as root inside a VM that runs the agent
-without permission prompts. It is not agent-writable (the copy is
-one-directional), which is the property that keeps this bounded.
+without permission prompts. It is not agent-writable, since the copy is
+one-directional.
 
-Because the whole directory is copied, its contents are the security surface:
-everything in `~/.agent-runner/` is present in the VM and reachable by the
-agent. That is the intent, but it makes the directory a deliberate choice
-rather than a dumping ground.
+The security surface is exactly `manifest` plus `startup.sh`: nothing enters
+the VM that isn't named in one of the two.
 
-Staging dereferences symlinks, so a link to `~/.ssh/id_ed25519` puts the real
-key material in the VM. The link makes that easy to forget, so the README says
-it plainly. The README's "Isolation & safety" section gains
-this note, plus the `chmod 600` expectation and the dedicated-key advice for
-SSH.
+Resolution is always real-file, never a symlink: a manifest entry pointing at
+`~/.ssh/id_ed25519` puts the real key material in the VM. The README's
+"Isolation & safety" section gets a note to that effect, plus the `chmod 600`
+expectation for `startup.sh` and the dedicated-key advice for SSH.
 
-A per-project hook (`$PWD/.agent-runner/startup.sh`) is explicitly **out of
-scope**: it would auto-execute code from a checked-out repository.
+A per-project hook (`$PWD/.agent-runner/startup.sh`) is explicitly out of
+scope: it would auto-execute code from a checked-out repository.
 
 ## Tests
 
 `tests/runners.bats` is a Dockerfile/README linter — it cannot boot a VM, and
-`msb` is not available in CI. Coverage is therefore structural:
+`msb` is not available in CI. Coverage is structural:
 
 - every runner has an entrypoint shim, and `ENTRYPOINT` points at it
 - every shim sources `/root/.agent-runner/startup.sh` guarded by an existence
   check, and aborts non-zero on failure
 - the codex shim sources `startup.sh` before its `codex login` branch
-- the README documents `~/.agent-runner/`, the guarded `--copy-dir`, and the
-  `cp -RL` staging step
-- every launcher stages through `cp -RL` rather than copying the host directory
-  directly (guards against a future edit reintroducing the symlink bug)
+- the README documents `~/.agent-runner/startup.sh`, `~/.agent-runner/manifest`,
+  and its `source:destination` format
+- every launcher calls the shared `_agent_runner_copy_flags` rather than
+  inlining its own list-parsing loop
+- `_agent_runner_copy_flags` resolves each entry through `realpath -e` before
+  building `--copy-file`/`--copy-dir` flags
 
-Symlink handling is settled by the check recorded above. End-to-end behaviour
-(does the staged directory arrive intact, does `git push` work through a copied
-credential) still needs one manual smoke test on a host with `msb`. This is
-called out rather than assumed.
+Not covered by CI, and needing one manual smoke test on a host with `msb`:
+`realpath -e` behaving the same on the target macOS version, and a
+manifest-carried credential actually authenticating (`git push`, `az`, `gh`).
 
 ## Scope
 
