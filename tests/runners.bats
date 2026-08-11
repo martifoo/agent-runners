@@ -81,3 +81,31 @@ setup() { REPO="$BATS_TEST_DIRNAME/.."; }
   grep -q "claude-box()" "$REPO/README.md"
   grep -q "ghcr.io" "$REPO/README.md"
 }
+
+@test "README defines the shared agent-runner functions used by every launcher" {
+  grep -q '_agent_runner_flags()' "$REPO/README.md"
+  grep -q '_agent_runner_wrapper()' "$REPO/README.md"
+  [ "$(grep -c '_agent_runner_flags || return 1' "$REPO/README.md")" -eq 3 ]
+  [ "$(grep -c '_agent_runner_wrapper ' "$REPO/README.md")" -ge 3 ]
+}
+
+@test "README's manifest resolution uses readlink -f, not realpath or a bash-only nameref" {
+  grep -q 'readlink -f' "$REPO/README.md"
+  ! grep -q 'realpath' "$REPO/README.md"
+  ! grep -q 'local -n' "$REPO/README.md"
+}
+
+@test "README launchers override the entrypoint via --script-path/--entrypoint" {
+  grep -q -- '--script-path' "$REPO/README.md"
+  grep -q -- '--entrypoint /bin/sh' "$REPO/README.md"
+}
+
+@test "README documents the agent-runner manifest and startup script" {
+  grep -q '.agent-runner/startup.sh' "$REPO/README.md"
+  grep -q '.agent-runner/manifest' "$REPO/README.md"
+  grep -qi 'source:destination' "$REPO/README.md"
+}
+
+@test "README's isolation section covers the registered-in manifest/startup.sh" {
+  awk '/^## Isolation/,/^## Build an image/' "$REPO/README.md" | grep -q '.agent-runner'
+}
