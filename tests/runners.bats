@@ -85,8 +85,13 @@ setup() { REPO="$BATS_TEST_DIRNAME/.."; }
 @test "README defines the shared agent-runner functions used by every launcher" {
   grep -q '_agent_runner_flags()' "$REPO/README.md"
   grep -q '_agent_runner_wrapper()' "$REPO/README.md"
-  [ "$(grep -c '_agent_runner_flags || return 1' "$REPO/README.md")" -eq 3 ]
-  [ "$(grep -c '_agent_runner_wrapper ' "$REPO/README.md")" -ge 3 ]
+  grep -q '_agent_runner_run()' "$REPO/README.md"
+  [ "$(grep -c '_agent_runner_run ' "$REPO/README.md")" -ge 3 ]
+}
+
+@test "README has no per-key env guards; keys travel only via startup.sh" {
+  ! grep -q 'ANTHROPIC_API_KEY.*&& e+=' "$REPO/README.md"
+  ! grep -qE '^\s*local -a e=\(\)' "$REPO/README.md"
 }
 
 @test "README's manifest resolution uses readlink -f, not realpath or a bash-only nameref" {

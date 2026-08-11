@@ -60,58 +60,52 @@ needed to build images locally.
    exec ${agent} \"\$@\""
    }
 
-   # Each launcher forwards the API keys / tokens you've exported, plus whatever
-   # ~/.agent-runner/ resolves to (see below). For another pi provider, add its
-   # --env line below.
-   pi-box() {
-     local -a e=()
-     [ -n "$ANTHROPIC_API_KEY" ]  && e+=(--env ANTHROPIC_API_KEY)
-     [ -n "$OPENAI_API_KEY" ]     && e+=(--env OPENAI_API_KEY)
-     [ -n "$GEMINI_API_KEY" ]     && e+=(--env GEMINI_API_KEY)
-     [ -n "$OPENROUTER_API_KEY" ] && e+=(--env OPENROUTER_API_KEY)
+   # Runs msb for one agent. Args: agent name, image suffix, then --env flags
+   # up to a literal "--", then the caller's own arguments to forward.
+   _agent_runner_run() {
+     local agent="$1" image="$2"; shift 2
+     local -a env_flags=()
+     while [ "$1" != "--" ]; do env_flags+=("$1"); shift; done
+     shift
      _agent_runner_flags || return 1
-     msb run "${_REG}pi-runner" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
-       --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${_AGENT_RUNNER_FLAGS[@]}" \
-       --entrypoint /bin/sh -- -c "$(_agent_runner_wrapper pi)" agent-entry "$@"
+     msb run "${_REG}${image}" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
+       --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${env_flags[@]}" "${_AGENT_RUNNER_FLAGS[@]}" \
+       --entrypoint /bin/sh -- -c "$(_agent_runner_wrapper "$agent")" agent-entry "$@"
    }
 
-   # For your Claude subscription, run `claude setup-token` once and export the
-   # CLAUDE_CODE_OAUTH_TOKEN it prints. For API billing, export ANTHROPIC_API_KEY.
+   # claude needs IS_SANDBOX=1 to allow bypass-permissions mode as root (msb
+   # drops the image's own ENV, so it's re-passed here every run). pi and
+   # codex need nothing fixed — their keys come from startup.sh.
+   pi-box() {
+     _agent_runner_run pi pi-runner -- "$@"
+   }
+
+   # For your Claude subscription, run `claude setup-token` once and put the
+   # CLAUDE_CODE_OAUTH_TOKEN it prints in startup.sh. For API billing, put
+   # ANTHROPIC_API_KEY there instead.
    claude-box() {
-     local -a e=(--env IS_SANDBOX=1)
-     [ -n "$ANTHROPIC_API_KEY" ]       && e+=(--env ANTHROPIC_API_KEY)
-     [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ] && e+=(--env CLAUDE_CODE_OAUTH_TOKEN)
-     _agent_runner_flags || return 1
-     msb run "${_REG}claude-runner" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
-       --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${_AGENT_RUNNER_FLAGS[@]}" \
-       --entrypoint /bin/sh -- -c "$(_agent_runner_wrapper claude)" agent-entry "$@"
+     _agent_runner_run claude claude-runner --env IS_SANDBOX=1 -- "$@"
    }
 
    codex-box() {
-     local -a e=()
-     [ -n "$OPENAI_API_KEY" ] && e+=(--env OPENAI_API_KEY)
-     _agent_runner_flags || return 1
-     msb run "${_REG}codex-runner" -t --pull "${_PULL:-always}" -w /workspace --volume "$PWD:/workspace" \
-       --cpus "${CPUS:-2}" --memory "${MEMORY:-1G}" "${e[@]}" "${_AGENT_RUNNER_FLAGS[@]}" \
-       --entrypoint /bin/sh -- -c "$(_agent_runner_wrapper codex)" agent-entry "$@"
+     _agent_runner_run codex codex-runner -- "$@"
    }
    ```
 
    Each run re-pulls `:latest`, reusing cached layers when the image is unchanged.
-   The `--env` guards are required because `msb` errors on an unset variable, so
-   each launcher forwards only the keys you've set. `~/.agent-runner/` (see
-   "Startup script & credentials" below) is registered into the VM before
-   boot, not mounted — nothing written inside the VM reaches these files. The
+   API keys and tokens travel exclusively via `~/.agent-runner/startup.sh` (see
+   "Startup script & credentials" below), registered into the VM before boot,
+   not mounted — nothing written inside the VM reaches these files. The
    `--entrypoint` override sources `startup.sh` before the agent starts; it
    replaces the image's own entrypoint, so it works the same against a stock
    image or one you built yourself.
 
 ## Use
 
-Export the API key for the agent you want, then launch it in your project:
+Put the API key for the agent you want in `~/.agent-runner/startup.sh` (see
+"Startup script & credentials" below), then launch it in your project:
 
 ```bash
-export ANTHROPIC_API_KEY=...      # or CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, …
 cd ~/my-project
 claude-box                        # or pi-box / codex-box
 ```
@@ -121,9 +115,10 @@ claude-box                        # or pi-box / codex-box
 - Need more power: `CPUS=8 MEMORY=8G claude-box`.
 - Pass flags straight to the agent: `codex-box --version`.
 
-**Codex** also works with a ChatGPT subscription — with no `OPENAI_API_KEY` set,
-it prompts you to sign in. **Claude** runs without per-action permission prompts
-(it's sandboxed); for normal prompting use `claude-box --permission-mode default`.
+**Codex** also works with a ChatGPT subscription — without `OPENAI_API_KEY` in
+`startup.sh`, it prompts you to sign in. **Claude** runs without per-action
+permission prompts (it's sandboxed); for normal prompting use `claude-box
+--permission-mode default`.
 
 ## Startup script & credentials
 
@@ -147,8 +142,8 @@ chmod 600 ~/.agent-runner/startup.sh   # it may hold secrets
 # ~/.agent-runner/startup.sh
 git config --global user.name  "Your Name"
 git config --global user.email "you@example.com"
-export OPENROUTER_API_KEY=…
-export GH_TOKEN=…   # `gh auth token`, or a PAT — see the note on gh below
+export ANTHROPIC_API_KEY=…        # or CLAUDE_CODE_OAUTH_TOKEN, OPENAI_API_KEY, …
+export GH_TOKEN=…                 # `gh auth token`, or a PAT — see the note on gh below
 ```
 
 ```
@@ -215,9 +210,9 @@ The `Dockerfile` for each agent lives in `runners/<agent>/`.
    for an example).
 2. Add the agent (npm package + major version) to the matrix in
    `.github/workflows/build-runners.yml`.
-3. Add a `<agent>-box` launcher that forwards the env vars it needs, calls
-   `_agent_runner_flags`, and passes `--entrypoint /bin/sh -- -c
-   "$(_agent_runner_wrapper <agent>)" agent-entry "$@"` to `msb run`.
+3. Add a `<agent>-box` launcher: `<agent>-box() { _agent_runner_run <agent>
+   <agent>-runner -- "$@"; }`. If the agent needs a fixed env var to run
+   sandboxed (like claude's `IS_SANDBOX=1`), add it before the `--`.
 
 ---
 
