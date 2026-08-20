@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Provision the shared base environment inside a throwaway sandbox.
-# Used by `ar build-base` to produce the msb snapshot.
+# Used by `agr build-base` to produce the msb snapshot.
 set -euo pipefail
 
 export DEBIAN_FRONTEND=noninteractive

@@ -28,10 +28,10 @@ run_host_startup
 ensure_grok_latest
 
 # Auth: XAI_API_KEY / GROK_DEPLOYMENT_KEY via env, or prior grok login on the
-# ar-grok-home volume (auth.json). Grok accepts the env key directly.
+# agr-grok-home volume (auth.json). Grok accepts the env key directly.
 if [[ -z "${XAI_API_KEY:-}" && -z "${GROK_DEPLOYMENT_KEY:-}" ]]; then
   if [[ ! -f /root/.grok/auth.json ]]; then
-    echo "ar: no XAI_API_KEY / GROK_DEPLOYMENT_KEY / ~/.grok/auth.json; grok may prompt to login" >&2
+    echo "agr: no XAI_API_KEY / GROK_DEPLOYMENT_KEY / ~/.grok/auth.json; grok may prompt to login" >&2
   fi
 fi
 

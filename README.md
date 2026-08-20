@@ -1,13 +1,13 @@
-# agent-runners (ar)
+# agent-runners (agr)
 
 Coding agents in throwaway [microsandbox](https://microsandbox.dev) microVMs.
 
 ```bash
 cd ~/my-project
-ar claude    # Claude Code
-ar codex     # OpenAI Codex
-ar pi        # pi
-ar grok      # Grok
+agr claude    # Claude Code
+agr codex     # OpenAI Codex
+agr pi        # pi
+agr grok      # Grok
 ```
 
 Each run boots an isolated microVM, mounts `$PWD`, installs the latest agent,
@@ -28,22 +28,22 @@ cd agent-runners && ./scripts/install.sh
 ## Configure
 
 ```bash
-mkdir -p ~/.config/ar && chmod 700 ~/.config/ar
-cat > ~/.config/ar/.env <<'EOF'
+mkdir -p ~/.config/agr && chmod 700 ~/.config/agr
+cat > ~/.config/agr/.env <<'EOF'
 ANTHROPIC_API_KEY=…       # or CLAUDE_CODE_OAUTH_TOKEN=…
 OPENAI_API_KEY=…          # Codex (or sign in with ChatGPT once)
 XAI_API_KEY=…             # Grok
 OPENROUTER_API_KEY=…      # pi
 GH_TOKEN=…                # optional
 EOF
-chmod 600 ~/.config/ar/.env
+chmod 600 ~/.config/agr/.env
 ```
 
 ## Run
 
 ```bash
 cd ~/my-project
-ar claude
+agr claude
 ```
 
 First launch builds a shared base snapshot (once). Later starts are fast; agents

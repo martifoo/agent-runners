@@ -11,6 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Make scripts executable
-        run: chmod +x bin/ar scripts/*.sh base/provision.sh harnesses/*/ensure.sh
+        run: chmod +x bin/agr scripts/*.sh base/provision.sh harnesses/*/ensure.sh
       - name: Run checks
         run: ./scripts/check.sh

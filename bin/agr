@@ -3,18 +3,18 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # shellcheck source=/dev/null
-. "$ROOT/lib/ar.sh"
+. "$ROOT/lib/agr.sh"
 
 usage() {
   cat <<'EOF'
-ar — coding agents in microsandbox microVMs
+agr — coding agents in microsandbox microVMs
 
 Usage:
-  ar <claude|codex|pi|grok> [options] [agent-args...]
-  ar build-base
-  ar install
-  ar uninstall [--purge]
-  ar help
+  agr <claude|codex|pi|grok> [options] [agent-args...]
+  agr build-base
+  agr install
+  agr uninstall [--purge]
+  agr help
 
 Options (before agent args):
   --rebuild-base   Rebuild the shared base snapshot, then run
@@ -22,14 +22,14 @@ Options (before agent args):
 
 Environment:
   CPUS / MEMORY         Sandbox size (default 2 / 2G)
-  AR_SNAPSHOT_NAME    Snapshot name (default ar-base)
-  AR_BASE_IMAGE       Image used to build base (default node:24-bookworm)
-  AR_CONFIG_DIR       Host config dir (default ~/.config/ar)
+  AGR_SNAPSHOT_NAME    Snapshot name (default agr-base)
+  AGR_BASE_IMAGE       Image used to build base (default node:24-bookworm)
+  AGR_CONFIG_DIR       Host config dir (default ~/.config/agr)
 
 Host config (optional):
-  ~/.config/ar/.env         Secrets (KEY=value). Keep chmod 600.
-  ~/.config/ar/startup.sh   Optional shell setup sourced in the guest
-  ~/.config/ar/manifest     source:destination lines copied into the guest
+  ~/.config/agr/.env         Secrets (KEY=value). Keep chmod 600.
+  ~/.config/agr/startup.sh   Optional shell setup sourced in the guest
+  ~/.config/agr/manifest     source:destination lines copied into the guest
 EOF
 }
 
@@ -40,7 +40,7 @@ case "$cmd" in
     ;;
   build-base)
     shift
-    ar_build_base "$@"
+    agr_build_base "$@"
     ;;
   install)
     shift
@@ -52,10 +52,10 @@ case "$cmd" in
     ;;
   claude|codex|pi|grok)
     shift
-    ar_run "$cmd" "$@"
+    agr_run "$cmd" "$@"
     ;;
   *)
-    echo "ar: unknown command: $cmd" >&2
+    echo "agr: unknown command: $cmd" >&2
     usage >&2
     exit 2
     ;;

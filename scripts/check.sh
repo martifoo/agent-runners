@@ -23,8 +23,8 @@ done < <(find "$ROOT" \( -path "$ROOT/.git" -o -path "$ROOT/docs" \) -prune -o \
 echo
 echo "== layout =="
 for f in \
-  bin/ar \
-  lib/ar.sh \
+  bin/agr \
+  lib/agr.sh \
   lib/guest-common.sh \
   base/provision.sh \
   scripts/install.sh \
@@ -41,28 +41,28 @@ do
   fi
 done
 
-if [[ -x "$ROOT/bin/ar" ]]; then
-  pass "bin/ar executable"
+if [[ -x "$ROOT/bin/agr" ]]; then
+  pass "bin/agr executable"
 else
-  bad "bin/ar not executable"
+  bad "bin/agr not executable"
 fi
 
 echo
 echo "== dotenv unit test =="
 # shellcheck source=/dev/null
-. "$ROOT/lib/ar.sh"
+. "$ROOT/lib/agr.sh"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
-export AR_CONFIG_DIR="$tmp"
+export AGR_CONFIG_DIR="$tmp"
 
 # Missing .env is fine.
-AR_DOTENV_FLAGS=(sentinel)
-ar_load_dotenv
-if ((${#AR_DOTENV_FLAGS[@]} == 0)); then
+AGR_DOTENV_FLAGS=(sentinel)
+agr_load_dotenv
+if ((${#AGR_DOTENV_FLAGS[@]} == 0)); then
   pass "missing .env → empty flags"
 else
-  bad "missing .env should clear/empty flags (got ${#AR_DOTENV_FLAGS[@]})"
+  bad "missing .env should clear/empty flags (got ${#AGR_DOTENV_FLAGS[@]})"
 fi
 
 cat > "$tmp/.env" <<'EOF'
@@ -76,7 +76,7 @@ EMPTY=
 EOF
 chmod 600 "$tmp/.env"
 
-ar_load_dotenv
+agr_load_dotenv
 # Expect 5 KEY=value entries → 10 array slots (--env KEY=val pairs)
 expected=(
   --env ANTHROPIC_API_KEY=sk-test
@@ -85,17 +85,17 @@ expected=(
   --env GH_TOKEN=plain
   --env EMPTY=
 )
-if [[ "${AR_DOTENV_FLAGS[*]}" == "${expected[*]}" ]]; then
+if [[ "${AGR_DOTENV_FLAGS[*]}" == "${expected[*]}" ]]; then
   pass "parses keys, export prefix, quotes; skips junk"
 else
   bad "dotenv parse mismatch"
-  printf '  got:  %s\n' "${AR_DOTENV_FLAGS[*]}" >&2
+  printf '  got:  %s\n' "${AGR_DOTENV_FLAGS[*]}" >&2
   printf '  want: %s\n' "${expected[*]}" >&2
 fi
 
 # Loose perms should warn (non-fatal).
 chmod 644 "$tmp/.env"
-warn="$(ar_load_dotenv 2>&1 >/dev/null || true)"
+warn="$(agr_load_dotenv 2>&1 >/dev/null || true)"
 if [[ "$warn" == *"should be chmod 600"* ]]; then
   pass "warns on loose .env perms"
 else

@@ -1,25 +1,25 @@
 #!/usr/bin/env bash
-# Host-side library for ar.
+# Host-side library for agr.
 # shellcheck shell=bash
 
 # Resolve the repo root from this file's location.
-ar_root() {
+agr_root() {
   local here
   here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
   cd "$here/.." && pwd
 }
 
-AR_ROOT="${AR_ROOT:-$(ar_root)}"
-AR_SNAPSHOT_NAME="${AR_SNAPSHOT_NAME:-ar-base}"
-AR_BASE_IMAGE="${AR_BASE_IMAGE:-node:24-bookworm}"
-AR_NPM_VOLUME="${AR_NPM_VOLUME:-ar-npm}"
-AR_HOME_VOLUME="${AR_HOME_VOLUME:-ar-home}"
-AR_CODEX_HOME_VOLUME="${AR_CODEX_HOME_VOLUME:-ar-codex-home}"
-AR_GROK_HOME_VOLUME="${AR_GROK_HOME_VOLUME:-ar-grok-home}"
-AR_CONFIG_DIR="${AR_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/ar}"
+AGR_ROOT="${AGR_ROOT:-$(agr_root)}"
+AGR_SNAPSHOT_NAME="${AGR_SNAPSHOT_NAME:-agr-base}"
+AGR_BASE_IMAGE="${AGR_BASE_IMAGE:-node:24-bookworm}"
+AGR_NPM_VOLUME="${AGR_NPM_VOLUME:-agr-npm}"
+AGR_HOME_VOLUME="${AGR_HOME_VOLUME:-agr-home}"
+AGR_CODEX_HOME_VOLUME="${AGR_CODEX_HOME_VOLUME:-agr-codex-home}"
+AGR_GROK_HOME_VOLUME="${AGR_GROK_HOME_VOLUME:-agr-grok-home}"
+AGR_CONFIG_DIR="${AGR_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/agr}"
 
 # Ensure a named volume exists (best-effort).
-ar_ensure_volume() {
+agr_ensure_volume() {
   local vol="$1"
   if msb volume list 2>/dev/null | grep -qE "(^|[[:space:]])${vol}([[:space:]]|$)"; then
     return 0
@@ -27,15 +27,15 @@ ar_ensure_volume() {
   msb volume create "$vol" >/dev/null 2>&1 || true
 }
 
-ar_ensure_volumes() {
-  ar_ensure_volume "$AR_NPM_VOLUME"
-  ar_ensure_volume "$AR_HOME_VOLUME"
-  ar_ensure_volume "$AR_CODEX_HOME_VOLUME"
-  ar_ensure_volume "$AR_GROK_HOME_VOLUME"
+agr_ensure_volumes() {
+  agr_ensure_volume "$AGR_NPM_VOLUME"
+  agr_ensure_volume "$AGR_HOME_VOLUME"
+  agr_ensure_volume "$AGR_CODEX_HOME_VOLUME"
+  agr_ensure_volume "$AGR_GROK_HOME_VOLUME"
 }
 
 # Warn when a secrets-bearing file is group/world-readable.
-ar_warn_insecure_perms() {
+agr_warn_insecure_perms() {
   local path="$1" mode
   [[ -e "$path" ]] || return 0
   # macOS: %Lp → 644; Linux: %a → 644 (sometimes 0644)
@@ -45,19 +45,19 @@ ar_warn_insecure_perms() {
   mode=$((8#$mode))
   mode=$((mode & 0777))
   if (( mode & 0077 )); then
-    printf 'ar: warning: %s should be chmod 600 (currently %03o)\n' "$path" "$mode" >&2
+    printf 'agr: warning: %s should be chmod 600 (currently %03o)\n' "$path" "$mode" >&2
   fi
 }
 
-# Parse ~/.config/ar/.env into AR_DOTENV_FLAGS as --env KEY=VALUE pairs.
+# Parse ~/.config/agr/.env into AGR_DOTENV_FLAGS as --env KEY=VALUE pairs.
 # dotenv format only (KEY=value); not a shell script.
-ar_load_dotenv() {
-  AR_DOTENV_FLAGS=()
-  local envfile="${AR_CONFIG_DIR}/.env"
+agr_load_dotenv() {
+  AGR_DOTENV_FLAGS=()
+  local envfile="${AGR_CONFIG_DIR}/.env"
   local line key val
 
   [[ -f "$envfile" ]] || return 0
-  ar_warn_insecure_perms "$envfile"
+  agr_warn_insecure_perms "$envfile"
 
   while IFS= read -r line || [[ -n "$line" ]]; do
     # trim leading whitespace
@@ -75,26 +75,26 @@ ar_load_dotenv() {
       elif [[ "$val" =~ ^\'(.*)\'$ ]]; then
         val="${BASH_REMATCH[1]}"
       fi
-      AR_DOTENV_FLAGS+=(--env "${key}=${val}")
+      AGR_DOTENV_FLAGS+=(--env "${key}=${val}")
     else
-      echo "ar: ignoring invalid .env line: $line" >&2
+      echo "agr: ignoring invalid .env line: $line" >&2
     fi
   done < "$envfile"
 }
 
-# Build flags for $AR_CONFIG_DIR/{startup.sh,manifest}.
-# Fills AR_USER_FLAGS array.
-ar_user_flags() {
-  AR_USER_FLAGS=()
+# Build flags for $AGR_CONFIG_DIR/{startup.sh,manifest}.
+# Fills AGR_USER_FLAGS array.
+agr_user_flags() {
+  AGR_USER_FLAGS=()
   local startup manifest_file line src dst real
 
-  startup="${AR_CONFIG_DIR}/startup.sh"
+  startup="${AGR_CONFIG_DIR}/startup.sh"
   if [[ -f "$startup" ]]; then
-    ar_warn_insecure_perms "$startup"
-    AR_USER_FLAGS+=(--script-path "startup:$startup")
+    agr_warn_insecure_perms "$startup"
+    AGR_USER_FLAGS+=(--script-path "startup:$startup")
   fi
 
-  manifest_file="${AR_CONFIG_DIR}/manifest"
+  manifest_file="${AGR_CONFIG_DIR}/manifest"
   [[ -f "$manifest_file" ]] || return 0
 
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -108,37 +108,37 @@ ar_user_flags() {
       real=""
     fi
     if [[ -z "$real" ]]; then
-      echo "ar: manifest entry not found: $src" >&2
+      echo "agr: manifest entry not found: $src" >&2
       return 1
     fi
     if [[ -d "$real" ]]; then
-      AR_USER_FLAGS+=(--copy-dir "$real:$dst")
+      AGR_USER_FLAGS+=(--copy-dir "$real:$dst")
     else
-      AR_USER_FLAGS+=(--copy-file "$real:$dst")
+      AGR_USER_FLAGS+=(--copy-file "$real:$dst")
     fi
   done < "$manifest_file"
 }
 
 # True if the named snapshot exists.
-ar_snapshot_exists() {
-  msb snapshot list 2>/dev/null | grep -qE "(^|[[:space:]])${AR_SNAPSHOT_NAME}([[:space:]]|$)"
+agr_snapshot_exists() {
+  msb snapshot list 2>/dev/null | grep -qE "(^|[[:space:]])${AGR_SNAPSHOT_NAME}([[:space:]]|$)"
 }
 
 # Provision base tools and create/replace the snapshot.
-ar_build_base() {
-  local name="ar-base-build-$$"
-  local provision="$AR_ROOT/base/provision.sh"
+agr_build_base() {
+  local name="agr-base-build-$$"
+  local provision="$AGR_ROOT/base/provision.sh"
   local cpus="${CPUS:-${MSB_CPUS:-2}}"
-  local memory="${MEMORY:-${MSB_MEMORY:-2G}}"
+  local memory="${MEMORY:-${MSB_MEMORY:-4G}}"
 
   [[ -f "$provision" ]] || {
-    echo "ar: missing $provision" >&2
+    echo "agr: missing $provision" >&2
     return 1
   }
 
-  echo "ar: provisioning base from ${AR_BASE_IMAGE}…"
+  echo "agr: provisioning base from ${AGR_BASE_IMAGE}…"
   # Run provision non-interactively; sandbox stops when the command exits.
-  msb run "$AR_BASE_IMAGE" \
+  msb run "$AGR_BASE_IMAGE" \
     --name "$name" \
     --replace \
     --cpus "$cpus" \
@@ -147,31 +147,31 @@ ar_build_base() {
     --no-tty \
     -- bash /.msb/scripts/provision
 
-  echo "ar: creating snapshot ${AR_SNAPSHOT_NAME}…"
-  msb snapshot create --from "$name" "$AR_SNAPSHOT_NAME" --force
+  echo "agr: creating snapshot ${AGR_SNAPSHOT_NAME}…"
+  msb snapshot create --from "$name" "$AGR_SNAPSHOT_NAME" --force
   msb remove "$name" >/dev/null 2>&1 || true
-  echo "ar: base snapshot ready (${AR_SNAPSHOT_NAME})"
+  echo "agr: base snapshot ready (${AGR_SNAPSHOT_NAME})"
 }
 
 # Run a harness against $PWD.
-# Usage: ar_run <claude|codex|pi> [agent args…]
-ar_run() {
+# Usage: agr_run <claude|codex|pi> [agent args…]
+agr_run() {
   local harness="${1:?harness required}"
   shift
 
-  local ensure="$AR_ROOT/harnesses/${harness}/ensure.sh"
-  local common="$AR_ROOT/lib/guest-common.sh"
+  local ensure="$AGR_ROOT/harnesses/${harness}/ensure.sh"
+  local common="$AGR_ROOT/lib/guest-common.sh"
   local cpus="${CPUS:-${MSB_CPUS:-2}}"
   local memory="${MEMORY:-${MSB_MEMORY:-2G}}"
   local name offline=0
   local -a extra_env=()
 
   [[ -f "$ensure" ]] || {
-    echo "ar: unknown harness: $harness" >&2
+    echo "agr: unknown harness: $harness" >&2
     return 1
   }
   [[ -f "$common" ]] || {
-    echo "ar: missing $common" >&2
+    echo "agr: missing $common" >&2
     return 1
   }
 
@@ -179,7 +179,7 @@ ar_run() {
   while (($#)); do
     case "$1" in
       --rebuild-base)
-        ar_build_base
+        agr_build_base
         shift
         ;;
       --offline)
@@ -200,14 +200,14 @@ ar_run() {
     esac
   done
 
-  if ! ar_snapshot_exists; then
-    echo "ar: base snapshot missing — building once…"
-    ar_build_base
+  if ! agr_snapshot_exists; then
+    echo "agr: base snapshot missing — building once…"
+    agr_build_base
   fi
 
-  ar_ensure_volumes
-  ar_load_dotenv || return 1
-  ar_user_flags || return 1
+  agr_ensure_volumes
+  agr_load_dotenv || return 1
+  agr_user_flags || return 1
 
   case "$harness" in
     claude) extra_env+=(--env IS_SANDBOX=1) ;;
@@ -215,7 +215,7 @@ ar_run() {
 
   # Optional offline mode for the guest ensure step.
   if ((offline)); then
-    extra_env+=(--env AR_OFFLINE=1)
+    extra_env+=(--env AGR_OFFLINE=1)
   fi
 
   # Terminal color capability for TUIs inside the microVM (Grok, etc.).
@@ -224,7 +224,7 @@ ar_run() {
   extra_env+=(--env "COLORTERM=${COLORTERM:-truecolor}")
 
   # Pass through common provider keys when already set on the host shell.
-  # Prefer ~/.config/ar/.env for secrets; these are convenience overrides.
+  # Prefer ~/.config/agr/.env for secrets; these are convenience overrides.
   local key
   for key in \
     ANTHROPIC_API_KEY ANTHROPIC_AUTH_TOKEN CLAUDE_CODE_OAUTH_TOKEN \
@@ -240,26 +240,26 @@ ar_run() {
   # .env values win over ambient host env when both define the same key:
   # append dotenv last so msb's last-write / guest env sees them. If msb
   # keeps first-wins instead, dotenv still covers keys not in the shell.
-  if ((${#AR_DOTENV_FLAGS[@]})); then
-    extra_env+=("${AR_DOTENV_FLAGS[@]}")
+  if ((${#AGR_DOTENV_FLAGS[@]})); then
+    extra_env+=("${AGR_DOTENV_FLAGS[@]}")
   fi
 
-  name="ar-${harness}-$(basename "$PWD" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/-$//')"
+  name="agr-${harness}-$(basename "$PWD" | tr -c 'a-zA-Z0-9._-' '-' | sed 's/-$//')"
   # Keep name length reasonable for msb.
   name="${name:0:80}"
 
   local -a cmd=(
     msb run
-    --from-snapshot "$AR_SNAPSHOT_NAME"
+    --from-snapshot "$AGR_SNAPSHOT_NAME"
     --name "$name"
     --replace
     -t
     -w /workspace
     --volume "$PWD:/workspace"
-    --mount-named "${AR_NPM_VOLUME}:/root/.npm"
-    --mount-named "${AR_HOME_VOLUME}:/root/.local"
-    --mount-named "${AR_CODEX_HOME_VOLUME}:/root/.codex"
-    --mount-named "${AR_GROK_HOME_VOLUME}:/root/.grok"
+    --mount-named "${AGR_NPM_VOLUME}:/root/.npm"
+    --mount-named "${AGR_HOME_VOLUME}:/root/.local"
+    --mount-named "${AGR_CODEX_HOME_VOLUME}:/root/.codex"
+    --mount-named "${AGR_GROK_HOME_VOLUME}:/root/.grok"
     --cpus "$cpus"
     --memory "$memory"
     --script-path "guest-common:$common"
@@ -269,8 +269,8 @@ ar_run() {
   if ((${#extra_env[@]})); then
     cmd+=("${extra_env[@]}")
   fi
-  if ((${#AR_USER_FLAGS[@]})); then
-    cmd+=("${AR_USER_FLAGS[@]}")
+  if ((${#AGR_USER_FLAGS[@]})); then
+    cmd+=("${AGR_USER_FLAGS[@]}")
   fi
 
   cmd+=(-- bash /.msb/scripts/ensure "$@")
