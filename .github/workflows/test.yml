@@ -1,0 +1,16 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Make scripts executable
+        run: chmod +x bin/ar scripts/*.sh base/provision.sh harnesses/*/ensure.sh
+      - name: Run checks
+        run: ./scripts/check.sh

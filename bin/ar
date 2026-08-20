@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=/dev/null
+. "$ROOT/lib/ar.sh"
+
+usage() {
+  cat <<'EOF'
+ar — coding agents in microsandbox microVMs
+
+Usage:
+  ar <claude|codex|pi|grok> [options] [agent-args...]
+  ar build-base
+  ar install
+  ar uninstall [--purge]
+  ar help
+
+Options (before agent args):
+  --rebuild-base   Rebuild the shared base snapshot, then run
+  --offline        Do not contact registries; require agent already installed
+
+Environment:
+  CPUS / MEMORY         Sandbox size (default 2 / 2G)
+  AR_SNAPSHOT_NAME    Snapshot name (default ar-base)
+  AR_BASE_IMAGE       Image used to build base (default node:24-bookworm)
+  AR_CONFIG_DIR       Host config dir (default ~/.config/ar)
+
+Host config (optional):
+  ~/.config/ar/.env         Secrets (KEY=value). Keep chmod 600.
+  ~/.config/ar/startup.sh   Optional shell setup sourced in the guest
+  ~/.config/ar/manifest     source:destination lines copied into the guest
+EOF
+}
+
+cmd="${1:-}"
+case "$cmd" in
+  ""|-h|--help|help)
+    usage
+    ;;
+  build-base)
+    shift
+    ar_build_base "$@"
+    ;;
+  install)
+    shift
+    "$ROOT/scripts/install.sh" "$@"
+    ;;
+  uninstall)
+    shift
+    "$ROOT/scripts/uninstall.sh" "$@"
+    ;;
+  claude|codex|pi|grok)
+    shift
+    ar_run "$cmd" "$@"
+    ;;
+  *)
+    echo "ar: unknown command: $cmd" >&2
+    usage >&2
+    exit 2
+    ;;
+esac
