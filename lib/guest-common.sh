@@ -16,7 +16,8 @@ ensure_claude_latest() {
   fi
 
   echo "agr: ensuring latest Claude Code…"
-  curl -fsSL https://claude.ai/install.sh | bash -s -- latest
+  npm config set allow-scripts=@anthropic-ai/claude-code --location=user
+  npm install -g @anthropic-ai/claude-code
 }
 
 # Always run the official Grok installer. Binary lands in ~/.grok/bin.
@@ -44,8 +45,7 @@ ensure_codex_latest() {
   fi
 
   echo "agr: ensuring latest Codex…"
-  curl -fsSL https://chatgpt.com/codex/install.sh \
-    | CODEX_NON_INTERACTIVE=1 CODEX_RELEASE=latest sh
+  npm install -g @openai/codex
 }
 
 # npm install at the pinned major. npm + the package cache handle freshness.
