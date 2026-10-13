@@ -16,6 +16,7 @@ AGR_NPM_VOLUME="${AGR_NPM_VOLUME:-agr-npm}"
 AGR_HOME_VOLUME="${AGR_HOME_VOLUME:-agr-home}"
 AGR_CODEX_HOME_VOLUME="${AGR_CODEX_HOME_VOLUME:-agr-codex-home}"
 AGR_GROK_HOME_VOLUME="${AGR_GROK_HOME_VOLUME:-agr-grok-home}"
+AGR_PI_HOME_VOLUME="${AGR_PI_HOME_VOLUME:-agr-pi-home}"
 AGR_CONFIG_DIR="${AGR_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/agr}"
 
 # Ensure a named volume exists (best-effort).
@@ -32,6 +33,7 @@ agr_ensure_volumes() {
   agr_ensure_volume "$AGR_HOME_VOLUME"
   agr_ensure_volume "$AGR_CODEX_HOME_VOLUME"
   agr_ensure_volume "$AGR_GROK_HOME_VOLUME"
+  agr_ensure_volume "$AGR_PI_HOME_VOLUME"
 }
 
 # Warn when a secrets-bearing file is group/world-readable.
@@ -231,7 +233,7 @@ agr_run() {
     OPENAI_API_KEY CODEX_ACCESS_TOKEN \
     XAI_API_KEY GROK_DEPLOYMENT_KEY \
     GROK_THEME GROK_APPEARANCE \
-    OPENROUTER_API_KEY GH_TOKEN; do
+    OPENROUTER_API_KEY GH_TOKEN AGR_PI_PACKAGES; do
     if [[ -n "${!key:-}" ]]; then
       extra_env+=(--env "$key")
     fi
@@ -260,6 +262,7 @@ agr_run() {
     --mount-named "${AGR_HOME_VOLUME}:/root/.local"
     --mount-named "${AGR_CODEX_HOME_VOLUME}:/root/.codex"
     --mount-named "${AGR_GROK_HOME_VOLUME}:/root/.grok"
+    --mount-named "${AGR_PI_HOME_VOLUME}:/root/.pi"
     --cpus "$cpus"
     --memory "$memory"
     --script-path "guest-common:$common"

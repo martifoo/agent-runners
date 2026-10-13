@@ -36,7 +36,7 @@ the tools, and reuses that until you rebuild.
 | `agr pi` | [pi](https://github.com/badlogic/pi-mono) | npm `@earendil-works/pi-coding-agent` |
 | `agr grok` | [Grok](https://x.ai/cli) | `x.ai/cli/install.sh` |
 
-Each launch re-runs the official installer (or `npm i -g @major`). Installers
+Each launch re-runs the official installer (or `npm i -g @latest`). Installers
 are idempotent; binaries/caches live on named volumes so upgrades stay cheap.
 
 ## Usage
@@ -94,6 +94,14 @@ stores `auth.json` on the `agr-codex-home` volume (skips the login screen).
 **Codex subscription:** omit the API key and complete ChatGPT login once; auth
 persists on that volume. Or copy a host `~/.codex/auth.json` via `manifest`.
 Bare env vars alone do **not** skip the interactive login screen.
+
+**pi packages:** set `AGR_PI_PACKAGES` to a space-separated list of pi packages.
+agr installs no packages by default. The list replaces `packages` in pi settings.
+pi auth, settings and sessions persist on the `agr-pi-home` volume.
+
+```dotenv
+AGR_PI_PACKAGES="npm:pi-subagents npm:pi-web-access"
+```
 
 **Grok:** set `XAI_API_KEY` (from [console.x.ai](https://console.x.ai)). Unlike
 Codex, Grok accepts the env key directly. Optional: `GROK_DEPLOYMENT_KEY` for
@@ -154,10 +162,12 @@ network rules. Never point agr at secrets you wouldn’t paste into a chat.
 | `AGR_BASE_IMAGE` | `node:24-bookworm` | image used to build the base |
 | `AGR_SNAPSHOT_NAME` | `agr-base` | msb snapshot name |
 | `AGR_CONFIG_DIR` | `~/.config/agr` | startup + manifest (`$XDG_CONFIG_HOME/agr`) |
+| `AGR_PI_PACKAGES` | none | pi packages to install |
 | `AGR_NPM_VOLUME` | `agr-npm` | npm cache (pi) |
 | `AGR_HOME_VOLUME` | `agr-home` | `~/.local` (claude/codex bins) |
 | `AGR_CODEX_HOME_VOLUME` | `agr-codex-home` | full `~/.codex` (auth.json + packages) |
 | `AGR_GROK_HOME_VOLUME` | `agr-grok-home` | full `~/.grok` (bin + auth.json + config) |
+| `AGR_PI_HOME_VOLUME` | `agr-pi-home` | full `~/.pi` (auth, settings, sessions, packages) |
 
 ## Layout
 
@@ -206,7 +216,7 @@ agr uninstall --purge      # shim + snapshot + volumes + ~/.config/agr
 
 ```bash
 agr build-base
-msb volume remove agr-home agr-npm agr-codex-home agr-grok-home
+msb volume remove agr-home agr-npm agr-codex-home agr-grok-home agr-pi-home
 ```
 
 ## Rename note (`ar` → `agr`)

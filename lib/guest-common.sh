@@ -48,10 +48,10 @@ ensure_codex_latest() {
   npm install -g @openai/codex
 }
 
-# npm install at the pinned major. npm + the package cache handle freshness.
-# Usage: ensure_npm_latest <pkg> <major> <bin> [--ignore-scripts]
+# npm install at the given version or dist-tag. npm + the package cache handle freshness.
+# Usage: ensure_npm_latest <pkg> <version> <bin> [--ignore-scripts]
 ensure_npm_latest() {
-  local pkg="$1" major="$2" bin="$3"
+  local pkg="$1" version="$2" bin="$3"
   shift 3
   local npm_flags=()
 
@@ -70,8 +70,8 @@ ensure_npm_latest() {
     return 0
   fi
 
-  echo "agr: ensuring ${pkg}@${major}…"
-  npm install -g "${npm_flags[@]}" "${pkg}@${major}"
+  echo "agr: ensuring ${pkg}@${version}…"
+  npm install -g "${npm_flags[@]}" "${pkg}@${version}"
 }
 
 # Log Codex into a file-backed auth.json when possible.

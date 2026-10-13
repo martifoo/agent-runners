@@ -10,6 +10,7 @@ NPM_VOLUME="${AGR_NPM_VOLUME:-agr-npm}"
 HOME_VOLUME="${AGR_HOME_VOLUME:-agr-home}"
 CODEX_HOME_VOLUME="${AGR_CODEX_HOME_VOLUME:-agr-codex-home}"
 GROK_HOME_VOLUME="${AGR_GROK_HOME_VOLUME:-agr-grok-home}"
+PI_HOME_VOLUME="${AGR_PI_HOME_VOLUME:-agr-pi-home}"
 
 purge=0
 for arg in "$@"; do
@@ -57,7 +58,7 @@ if ((purge)); then
       fi
     done
 
-    for vol in "$HOME_VOLUME" "$NPM_VOLUME" "$CODEX_HOME_VOLUME" "$GROK_HOME_VOLUME" \
+    for vol in "$HOME_VOLUME" "$NPM_VOLUME" "$CODEX_HOME_VOLUME" "$GROK_HOME_VOLUME" "$PI_HOME_VOLUME" \
                ar-home ar-npm ar-codex-home ar-grok-home; do
       if msb volume list 2>/dev/null | grep -qE "(^|[[:space:]])${vol}([[:space:]]|$)"; then
         msb volume remove "$vol" 2>/dev/null \
@@ -87,7 +88,7 @@ else
   echo "Left in place (use --purge to remove):"
   echo "  config:   $CONFIG_DIR"
   echo "  snapshot: $SNAPSHOT_NAME"
-  echo "  volumes:  $HOME_VOLUME $NPM_VOLUME $CODEX_HOME_VOLUME $GROK_HOME_VOLUME"
+  echo "  volumes:  $HOME_VOLUME $NPM_VOLUME $CODEX_HOME_VOLUME $GROK_HOME_VOLUME $PI_HOME_VOLUME"
   echo "  checkout: (this repo)"
 fi
 
